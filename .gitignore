@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Turborepo cache
+.turbo/
+
+# Logs
+*.log
+
+# BMAD / Ralph / Sandbox
+.ralph/
+.sandbox/
+_bmad-output/
+
+# graphify outputs — rebuilt on every update, don't commit
+graphify-out/cache/
+graphify-out/graph.json
+graphify-out/graph.html
+graphify-out/.rebuild.lock
+
+# Local env / misc
+*.local
+
+# start-project provider yönlendirme (secret) — .example tracked kalır
+.start-project/provider.env
+
+# Screenshots / design scratch
+ss/
+
+# Editor
+.vscode/*
+.idea
+.DS_Store
+
+# pnpm project-local store
+.pnpm-store/
+
+# start-project Ralph provider override (secret)
+.start-project/provider.ralph.env
+.start-project/provider.ralph.env.off
+.ralph/logs/
