@@ -14,3 +14,9 @@ Tek bump yolu `./release` — elle `VERSION`/tag düzenlemeyin.
   karma, and flagging RPM Fusion-origin packages as untracked instead of
   silently treating them as safe.
 - Preferences UI to edit the watch-list and the minimum-stable-age threshold.
+
+### Fixed
+- Bodhi queries no longer throw `URLSearchParams is not defined` when run
+  for real inside GNOME Shell (GJS has no `URLSearchParams` global; only
+  Node's test runner did, which is why this passed `npm test` but would
+  have failed on every real poll).
