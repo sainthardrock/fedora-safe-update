@@ -20,3 +20,6 @@ Tek bump yolu `./release` — elle `VERSION`/tag düzenlemeyin.
   for real inside GNOME Shell (GJS has no `URLSearchParams` global; only
   Node's test runner did, which is why this passed `npm test` but would
   have failed on every real poll).
+- `metadata.json`'s declared `shell-version` range (45-48) didn't cover
+  GNOME Shell 50, so the shell silently refused to load the extension at
+  all on anything newer than 48 — extended the range to 45-50.

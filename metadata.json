@@ -2,7 +2,7 @@
   "uuid": "fedora-update-watch@sainthardrock.github.io",
   "name": "Fedora Update Watch",
   "description": "Shows how long a pending kernel/driver update has been in Fedora's Bodhi stable repo, and its karma, before you install it.",
-  "shell-version": ["45", "46", "47", "48"],
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
   "url": "https://github.com/sainthardrock/fedora-update-watch",
   "settings-schema": "org.gnome.shell.extensions.fedora-update-watch",
   "gettext-domain": "fedora-update-watch"
