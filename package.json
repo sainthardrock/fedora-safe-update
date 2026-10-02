@@ -1,0 +1,11 @@
+{
+  "name": "fedora-update-watch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GNOME Shell extension that checks Fedora's Bodhi API before you install risky kernel/driver updates.",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -1,0 +1,8 @@
+/* State is primarily conveyed through icon-name swapping in extension.js
+ * (symbolic icons inherit the shell theme's foreground color automatically),
+ * not CSS color overrides — St's theme engine has no portable "warning
+ * color" variable to hook into safely across themes. This just adds a
+ * theme-neutral weight bump so risky/unknown rows stand out in the list. */
+.fedora-update-watch-risk {
+  font-weight: bold;
+}
