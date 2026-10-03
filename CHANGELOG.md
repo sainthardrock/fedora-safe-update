@@ -7,6 +7,7 @@ Tek bump yolu `./release` — elle `VERSION`/tag düzenlemeyin.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-03
 ### Added
 - GNOME Shell extension: panel indicator checks watched packages (kernel,
   mesa, nvidia-driver/akmod-nvidia/kmod-nvidia, amdgpu by default) against
@@ -23,3 +24,4 @@ Tek bump yolu `./release` — elle `VERSION`/tag düzenlemeyin.
 - `metadata.json`'s declared `shell-version` range (45-48) didn't cover
   GNOME Shell 50, so the shell silently refused to load the extension at
   all on anything newer than 48 — extended the range to 45-50.
+
