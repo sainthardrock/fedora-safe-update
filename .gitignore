@@ -11,22 +11,29 @@ build/
 # Logs
 *.log
 
-# BMAD / Ralph / Sandbox
+# Local tooling scaffold / sandbox / agent config — machine-generated,
+# never hand-authored project source. Never committed, public or private.
 .ralph/
 .sandbox/
 _bmad-output/
+_bmad/
+bmalph/
+.start-project/
+.claude/
+.mcp.json
+.graphifyignore
+CLAUDE.md
+cli
+qa
+run
+release
+graph
 
-# graphify outputs — rebuilt on every update, don't commit
-graphify-out/cache/
-graphify-out/graph.json
-graphify-out/graph.html
-graphify-out/.rebuild.lock
+# Local knowledge-graph output — rebuilt on every update, don't commit
+graphify-out/
 
 # Local env / misc
 *.local
-
-# start-project provider yönlendirme (secret) — .example tracked kalır
-.start-project/provider.env
 
 # Screenshots / design scratch
 ss/
@@ -38,8 +45,3 @@ ss/
 
 # pnpm project-local store
 .pnpm-store/
-
-# start-project Ralph provider override (secret)
-.start-project/provider.ralph.env
-.start-project/provider.ralph.env.off
-.ralph/logs/
