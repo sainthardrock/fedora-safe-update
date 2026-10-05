@@ -1,9 +1,8 @@
 {
-  "uuid": "fedora-update-watch@sainthardrock.github.io",
-  "name": "Fedora Update Watch",
-  "description": "Shows how long a pending kernel/driver update has been in Fedora's Bodhi stable repo, and its karma, before you install it.",
+  "uuid": "fedora-safe-update@sainthardrock.github.io",
+  "name": "Fedora Safe Update",
+  "description": "Shows whether it's safe to update right now: kernel/mesa's Bodhi stable age and karma, and whether a pending GNOME Shell upgrade will disable any of your enabled extensions.",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "url": "https://github.com/sainthardrock/fedora-update-watch",
-  "settings-schema": "org.gnome.shell.extensions.fedora-update-watch",
-  "gettext-domain": "fedora-update-watch"
+  "url": "https://github.com/sainthardrock/fedora-safe-update",
+  "gettext-domain": "fedora-safe-update"
 }

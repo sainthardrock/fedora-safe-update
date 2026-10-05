@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "GNOME Shell extension that checks Fedora's Bodhi API before you install risky kernel/driver updates.",
+  "description": "GNOME Shell extension (Fedora Safe Update) that checks whether it's safe to update: kernel/mesa via Fedora's Bodhi API, plus whether a pending GNOME Shell upgrade will disable enabled extensions.",
   "license": "GPL-3.0-or-later",
   "scripts": {
     "test": "node --test"

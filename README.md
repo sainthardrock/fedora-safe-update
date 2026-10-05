@@ -1,54 +1,63 @@
-# Fedora Update Watch
+# Fedora Safe Update
 
-A GNOME Shell extension that checks **how long a pending kernel/driver
-update has actually been in Fedora's stable repo — and whether testers have
-flagged problems with it** — before you install it.
+A GNOME Shell extension that tells you **whether it's actually safe to run
+`dnf update` right now** — before you do it.
 
-Fedora's offline-update prompt at shutdown is easy to confirm by accident.
-This extension doesn't try to block that prompt (a Shell extension can't —
-see [Scope](#scope) below); instead it gives you the information to decide
-deliberately, and the one-line command to turn that prompt off.
+Two independent, deterministic checks, no configuration:
 
-> **Fedora-specific.** The extension itself runs on any GNOME Shell 45+
-> distro, but its data source — [Bodhi](https://bodhi.fedoraproject.org), the
-> Fedora Updates System — only exists for Fedora. On any other distro it
-> shows an "unsupported distro" state and does nothing.
+- **kernel / mesa**, checked against Fedora's [Bodhi](https://bodhi.fedoraproject.org)
+  API — how long the pending update has been in the stable repo, and
+  whether testers have reported problems with it (karma).
+- **GNOME Shell itself**, checked locally — if a pending `gnome-shell`
+  update crosses into a new major version, this reads every *other*
+  enabled extension's `metadata.json` and tells you by name which ones
+  don't declare support for that version and will get disabled or break.
+
+> **Fedora-specific** (the Bodhi half). The extension runs on any GNOME
+> Shell 45+ distro, but the Bodhi half only means something on Fedora. On
+> any other distro it shows an "unsupported distro" state for that half
+> and does nothing there; the GNOME Shell compatibility check still works
+> anywhere, since it doesn't depend on Bodhi at all.
+
+## Why
+
+Fedora's offline-update prompt at shutdown is easy to confirm by accident,
+and a single `dnf update` pulls from every enabled repo at once —
+including GNOME Shell itself. This extension doesn't try to block that
+prompt (a Shell extension can't); instead it gives you the two pieces of
+information that actually predict "will this update break my desktop":
+whether the risky core packages have had time to shake out bugs, and
+whether updating GNOME Shell will silently kill extensions you rely on.
+
+GPU drivers were deliberately left out: Nvidia's proprietary driver ships
+from RPM Fusion, which has no Bodhi record at all (it would always show
+as "untracked", which isn't a real signal), and mesa already covers the
+GPU-driver risk that applies to everyone on Intel/AMD/`nouveau`.
 
 ## What it shows
 
-A panel indicator with a menu listing, for each watched package that
-currently has a pending update:
+Click the panel indicator for a menu with, for each check:
 
-- **ok** — pushed to stable long enough ago, no negative feedback
-- **below-threshold** — too recent, or testers have reported problems
-  (negative karma), regardless of age
-- **untracked** — Bodhi has no record of it (this is normal for RPM Fusion
-  packages like `akmod-nvidia`; check RPM Fusion's own changelog manually)
-- **unknown** — the Bodhi check itself failed (network issue, Bodhi down)
-  and there's no prior cached result to fall back on; treated as cautiously
-  as below-threshold, never silently shown as "ok"
+- **kernel / mesa**: `ok` (old enough, no negative feedback), `below-threshold`
+  (too recent, or negative karma — regardless of age), `untracked` (no
+  Bodhi record — shouldn't normally happen for these two), or `unknown`
+  (the Bodhi check itself failed and there's no prior cached result).
+- **GNOME Shell**: always shown — "no major-version upgrade pending" when
+  there's nothing to worry about, otherwise either "all enabled extensions
+  are compatible" or a named list of the ones that will break.
 
-Default watch-list: `kernel`, `mesa`, `nvidia-driver`, `akmod-nvidia`,
-`kmod-nvidia`, `xorg-x11-drv-amdgpu`. Edit it, and the minimum-stable-age
-threshold, from the extension's preferences.
+There's nothing to configure — both checks are fixed; see [Why](#why) for
+the reasoning.
 
 ## Install
 
-> **Before your first real install/publish:** `metadata.json`'s `uuid`
-> (`fedora-update-watch@sainthardrock.github.io`) and this README's clone URL
-> use the author's actual GitHub handle as a reasonable default, but neither
-> was explicitly confirmed as final. Double-check both match where you're
-> actually publishing this before relying on them (e.g. for
-> extensions.gnome.org submission, the uuid becomes permanent).
-
 ```sh
-git clone https://github.com/sainthardrock/fedora-update-watch.git
-cd fedora-update-watch
+git clone https://github.com/sainthardrock/fedora-safe-update.git
+cd fedora-safe-update
 UUID=$(python3 -c "import json;print(json.load(open('metadata.json'))['uuid'])")
 mkdir -p ~/.local/share/gnome-shell/extensions/"$UUID"
-cp -r metadata.json extension.js prefs.js lib schemas stylesheet.css \
+cp -r metadata.json extension.js lib stylesheet.css \
   ~/.local/share/gnome-shell/extensions/"$UUID"/
-glib-compile-schemas ~/.local/share/gnome-shell/extensions/"$UUID"/schemas
 gnome-extensions enable "$UUID"
 ```
 
@@ -70,13 +79,12 @@ gsettings set org.gnome.software download-updates false
 ## Development
 
 ```sh
-npm test                # unit tests for lib/bodhi.js, lib/risk.js (node:test)
-glib-compile-schemas schemas/   # required before the extension will load
+npm test                # unit tests for lib/bodhi.js, lib/risk.js, lib/shellCompat.js (node:test)
 ```
 
-`extension.js` and `prefs.js` are thin glue around the `lib/` modules and
-depend on a running GNOME Shell, so they aren't covered by automated tests.
-To smoke-test them manually in an isolated nested Shell session:
+`extension.js` is thin glue around the `lib/` modules and depends on a
+running GNOME Shell, so it isn't covered by automated tests. To
+smoke-test it manually in an isolated nested Shell session:
 
 ```sh
 dbus-run-session -- gnome-shell --nested --wayland
@@ -88,10 +96,8 @@ the extension leaves no dangling timers (Looking Glass: `lg`, Alt+F2).
 
 ## Known limitations
 
-- RPM Fusion packages (`akmod-nvidia`, etc.) are outside Bodhi's scope by
-  design — they're flagged `untracked`, not scraped from RPM Fusion's own
-  bug tracker.
-- No automated UI test coverage for `extension.js`/`prefs.js` (see above).
+- GPU driver updates (Nvidia via RPM Fusion) are out of scope — see [Why](#why).
+- No automated UI test coverage for `extension.js` (see Development above).
 
 ## License
 

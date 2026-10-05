@@ -11,21 +11,37 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { fetchLatestUpdateForPackage } from './lib/bodhi.js';
 import { computeRisk } from './lib/risk.js';
 import { getPendingWatchedPackages } from './lib/packageDetector.js';
+import { parsePendingGnomeShellVersion, checkShellUpgradeCompatibility } from './lib/shellCompat.js';
 
 const POLL_INTERVAL_SECONDS = 60 * 60; // hourly is plenty; this isn't a live ticker
 
-// Severity ordering for aggregating many per-package states into one panel
-// icon. 'unknown' (we tried to check and failed, with nothing cached) and a
-// stale cached read both rank above 'untracked' (Bodhi has no opinion by
-// design) — a failed check is more worth noticing than a package Bodhi
-// never tracks in the first place.
-const STATE_PRIORITY = { ok: 0, untracked: 1, unknown: 2, 'below-threshold': 3 };
+// Kernel and mesa are the only packages a GNOME Shell extension can usefully
+// risk-score via Bodhi: both are built by Fedora itself and go through
+// Bodhi's testing/karma gate before reaching stable. GPU drivers were
+// deliberately dropped — Nvidia's RPM Fusion build never has a Bodhi record
+// (permanently 'untracked', not a real signal) and AMD/Intel-only coverage
+// via mesa already captures the GPU-driver risk that applies to everyone.
+const WATCH_LIST = ['kernel', 'mesa'];
+const MIN_STABLE_AGE_DAYS = 5;
+
+// Severity ordering for aggregating many per-check states into one panel
+// icon. 'shell-incompatible' outranks everything else: it's not a
+// probabilistic Bodhi read, it's a certainty (this extension's declared
+// shell-version range says so) that something currently running will break.
+const STATE_PRIORITY = {
+  ok: 0,
+  untracked: 1,
+  unknown: 2,
+  'below-threshold': 3,
+  'shell-incompatible': 4,
+};
 
 const ICON_FOR_STATE = {
   ok: 'emblem-default-symbolic',
   untracked: 'dialog-question-symbolic',
   unknown: 'dialog-warning-symbolic',
   'below-threshold': 'dialog-warning-symbolic',
+  'shell-incompatible': 'dialog-warning-symbolic',
 };
 
 // Bodhi's API has no GJS-native client, so this adapts Soup3 to the
@@ -123,7 +139,7 @@ function readOsRelease() {
     const [, contents] = file.load_contents(null);
     return parseOsRelease(new TextDecoder('utf-8').decode(contents));
   } catch (err) {
-    logError(err, 'fedora-update-watch: could not read /etc/os-release');
+    logError(err, 'fedora-safe-update: could not read /etc/os-release');
     return {};
   }
 }
@@ -135,7 +151,7 @@ function isFedora(osRelease) {
 function getFedoraRelease(osRelease) {
   if (!osRelease.VERSION_ID) {
     logError(
-      new Error('fedora-update-watch: no VERSION_ID in /etc/os-release'),
+      new Error('fedora-safe-update: no VERSION_ID in /etc/os-release'),
       'Bodhi queries will not be filtered by release — results may span unrelated Fedora versions'
     );
     return undefined;
@@ -143,19 +159,54 @@ function getFedoraRelease(osRelease) {
   return `F${osRelease.VERSION_ID}`;
 }
 
-export default class FedoraUpdateWatchExtension extends Extension {
+// Reads a single extension's metadata.json from either the per-user or
+// system-wide extensions directory. Returns null if it can't be found or
+// parsed — a missing/corrupt metadata.json isn't this extension's problem
+// to crash over.
+function readExtensionMetadata(uuid) {
+  const candidatePaths = [
+    GLib.build_filenamev([GLib.get_home_dir(), '.local/share/gnome-shell/extensions', uuid, 'metadata.json']),
+    `/usr/share/gnome-shell/extensions/${uuid}/metadata.json`,
+  ];
+  for (const path of candidatePaths) {
+    try {
+      const file = Gio.File.new_for_path(path);
+      const [, contents] = file.load_contents(null);
+      const json = JSON.parse(new TextDecoder('utf-8').decode(contents));
+      return { uuid, name: json.name ?? uuid, shellVersions: json['shell-version'] ?? [] };
+    } catch {
+      // not at this path — try the next one.
+    }
+  }
+  return null;
+}
+
+// Currently-enabled extensions, read straight from GNOME Shell's own
+// GSettings (not this extension's — that schema no longer exists). This is
+// the same list the Shell itself consults, so it matches what will actually
+// try to load after a Shell upgrade.
+function getEnabledExtensionMetadata(ownUuid) {
+  const shellSettings = new Gio.Settings({ schema_id: 'org.gnome.shell' });
+  const enabledUuids = shellSettings.get_strv('enabled-extensions');
+  return enabledUuids
+    .filter((uuid) => uuid !== ownUuid)
+    .map(readExtensionMetadata)
+    .filter((meta) => meta !== null);
+}
+
+export default class SafeUpdateExtension extends Extension {
   enable() {
-    this._settings = this.getSettings();
     this._cancellable = new Gio.Cancellable();
     this._soupSession = new Soup.Session();
     this._soupFetch = createSoupFetch(this._soupSession, this._cancellable);
     this._lastNotified = new Set();
+    this._lastNotifiedShellMajor = null;
     this._lastStates = new Map();
     this._timeoutId = null;
     this._pollInFlight = false;
     this._pollGeneration = (this._pollGeneration ?? 0) + 1;
 
-    this._indicator = new PanelMenu.Button(0.0, 'Fedora Update Watch', false);
+    this._indicator = new PanelMenu.Button(0.0, 'Fedora Safe Update', false);
     this._icon = new St.Icon({
       icon_name: 'software-update-available-symbolic',
       style_class: 'system-status-icon',
@@ -199,7 +250,6 @@ export default class FedoraUpdateWatchExtension extends Extension {
     }
     this._soupSession = null;
     this._soupFetch = null;
-    this._settings = null;
     this._lastNotified = null;
     this._lastStates = null;
   }
@@ -217,32 +267,41 @@ export default class FedoraUpdateWatchExtension extends Extension {
     if (this._pollInFlight) return; // don't overlap with a poll already running
     this._pollInFlight = true;
     const generation = this._pollGeneration;
+    const cancellable = this._cancellable;
 
     try {
-      const watchList = this._settings.get_strv('watch-list');
-      const minStableAgeDays = this._settings.get_int('min-stable-age-days');
-      const cancellable = this._cancellable;
-
-      const pending = await getPendingWatchedPackages(watchList, {
-        runSubprocess: (argv, opts) => runSubprocess(argv, { ...opts, cancellable }),
-      });
-      if (generation !== this._pollGeneration) return; // disabled/re-enabled meanwhile
-
       this._menuSection.removeAll();
-
-      if (pending.length === 0) {
-        this._icon.icon_name = ICON_FOR_STATE.ok;
-        this._menuSection.addMenuItem(
-          new PopupMenu.PopupMenuItem(_('No watched packages pending'), { reactive: false })
-        );
-        return;
-      }
-
       let worstState = 'ok';
       let anyStale = false;
 
+      const shellCheck = await this._checkShellCompatibility(cancellable);
+      if (generation !== this._pollGeneration) return;
+      this._addShellCompatMenuItem(shellCheck);
+      if (shellCheck.error) {
+        if (worstState === 'ok') worstState = 'unknown';
+      } else if (shellCheck.incompatible.length > 0) {
+        worstState = 'shell-incompatible';
+        if (this._lastNotifiedShellMajor !== shellCheck.targetMajor) {
+          this._notifyShellIncompatibility(shellCheck);
+          this._lastNotifiedShellMajor = shellCheck.targetMajor;
+        }
+      } else {
+        this._lastNotifiedShellMajor = null;
+      }
+
+      const pending = await getPendingWatchedPackages(WATCH_LIST, {
+        runSubprocess: (argv, opts) => runSubprocess(argv, { ...opts, cancellable }),
+      });
+      if (generation !== this._pollGeneration) return;
+
+      if (pending.length === 0) {
+        this._menuSection.addMenuItem(
+          new PopupMenu.PopupMenuItem(_('No watched packages pending'), { reactive: false })
+        );
+      }
+
       for (const pkg of pending) {
-        const { result, stale } = await this._checkPackage(pkg, minStableAgeDays);
+        const { result, stale } = await this._checkPackage(pkg);
         if (generation !== this._pollGeneration) return;
 
         if (stale) anyStale = true;
@@ -268,19 +327,53 @@ export default class FedoraUpdateWatchExtension extends Extension {
       const displayState = anyStale && worstState === 'ok' ? 'unknown' : worstState;
       this._icon.icon_name = ICON_FOR_STATE[displayState];
     } catch (err) {
-      logError(err, 'fedora-update-watch: poll failed');
+      logError(err, 'fedora-safe-update: poll failed');
     } finally {
       this._pollInFlight = false;
     }
   }
 
-  async _checkPackage(pkg, minStableAgeDays) {
+  // Local, deterministic check: if GNOME Shell has a pending update that
+  // crosses a major version, which currently-enabled extensions don't
+  // declare support for that version? No network involved — this is the
+  // kind of break we hit ourselves during development (a resource path
+  // that moved between Shell versions), so it's worth surfacing on its own
+  // rather than folding it into the Bodhi-based package checks.
+  async _checkShellCompatibility(cancellable) {
+    let currentMajor;
+    try {
+      const stdout = await runSubprocess(['rpm', '-q', '--qf', '%{version}', 'gnome-shell'], {
+        cancellable,
+      });
+      currentMajor = stdout.trim().split('.')[0];
+    } catch (err) {
+      logError(err, 'fedora-safe-update: could not determine installed GNOME Shell version');
+      return { error: true, upgrading: false, targetMajor: null, incompatible: [] };
+    }
+
+    let pendingStdout;
+    try {
+      pendingStdout = await runSubprocess(['dnf', 'check-update', 'gnome-shell'], {
+        successExitCodes: [0, 100],
+        cancellable,
+      });
+    } catch (err) {
+      logError(err, 'fedora-safe-update: could not check for a pending GNOME Shell update');
+      return { error: true, upgrading: false, targetMajor: null, incompatible: [] };
+    }
+
+    const pendingVersion = parsePendingGnomeShellVersion(pendingStdout);
+    const extensions = getEnabledExtensionMetadata(this.uuid);
+    return { error: false, ...checkShellUpgradeCompatibility({ currentMajor, pendingVersion, extensions }) };
+  }
+
+  async _checkPackage(pkg) {
     try {
       const record = await fetchLatestUpdateForPackage(pkg, {
         fetchImpl: this._soupFetch,
         fedoraRelease: this._fedoraRelease,
       });
-      const result = computeRisk(record, { minStableAgeDays, now: new Date() });
+      const result = computeRisk(record, { minStableAgeDays: MIN_STABLE_AGE_DAYS, now: new Date() });
       this._lastStates?.set(pkg, result);
       return { result, stale: false };
     } catch (err) {
@@ -289,28 +382,69 @@ export default class FedoraUpdateWatchExtension extends Extension {
       // no prior state (e.g. the very first poll after enable() hit an
       // error), the fallback is 'unknown' — explicitly "we don't know,
       // be cautious" — never 'ok'.
-      logError(err, `fedora-update-watch: Bodhi lookup failed for ${pkg}`);
+      logError(err, `fedora-safe-update: Bodhi lookup failed for ${pkg}`);
       const result =
         this._lastStates?.get(pkg) ?? { state: 'unknown', daysSinceStable: null, karma: null };
       return { result, stale: true };
     }
   }
 
-  _addMenuItem(pkg, { state, daysSinceStable, karma }, stale) {
-    let label;
+  // One plain-language sentence per package state, in terms of what the
+  // user should actually do — not a dump of the raw Bodhi fields. Shared
+  // between the menu item and the notification so the two never drift.
+  _describePackageState(pkg, { state, daysSinceStable, karma }, stale) {
     if (state === 'untracked') {
-      label = _('%s: untracked by Bodhi — check manually').replace('%s', pkg);
-    } else if (state === 'unknown') {
-      label = _('%s: Bodhi check failed — unknown, be cautious').replace('%s', pkg);
-    } else {
-      const template = stale
-        ? _('%s: %d day(s) in stable, karma %d (stale)')
-        : _('%s: %d day(s) in stable, karma %d');
-      label = template
+      return _(
+        "%s: Fedora's update-testing system has no record of this update — check manually before installing"
+      ).replace('%s', pkg);
+    }
+    if (state === 'unknown') {
+      return _('%s: could not check right now — treat it as risky until this is resolved').replace(
+        '%s',
+        pkg
+      );
+    }
+
+    const karmaNote =
+      karma > 0
+        ? _('%d tester(s) reported no problems').replace('%d', String(karma))
+        : karma === 0
+          ? _('no tester feedback yet')
+          : _('%d tester(s) reported problems with it').replace('%d', String(Math.abs(karma)));
+    const staleSuffix = stale ? _(' (showing last known info — current check failed)') : '';
+
+    if (state === 'ok') {
+      return (
+        _('%s: safe to update — pushed to stable %d day(s) ago, %s')
+          .replace('%s', pkg)
+          .replace('%d', String(daysSinceStable))
+          .replace('%s', karmaNote) + staleSuffix
+      );
+    }
+
+    // below-threshold: negative karma is its own, more urgent reason —
+    // "wait N more days" doesn't make sense when the real problem is
+    // reported bugs, not a package that just needs more time to season.
+    if (karma < 0) {
+      return (
+        _('%s: %s — hold off on updating this one')
+          .replace('%s', pkg)
+          .replace('%s', karmaNote) + staleSuffix
+      );
+    }
+    const remainingDays = Math.max(MIN_STABLE_AGE_DAYS - daysSinceStable, 1);
+    return (
+      _('%s: pushed to stable %d day(s) ago — wait %d more day(s) before updating (%s)')
         .replace('%s', pkg)
         .replace('%d', String(daysSinceStable))
-        .replace('%d', String(karma));
-    }
+        .replace('%d', String(remainingDays))
+        .replace('%s', karmaNote) + staleSuffix
+    );
+  }
+
+  _addMenuItem(pkg, result, stale) {
+    const { state } = result;
+    const label = this._describePackageState(pkg, result, stale);
 
     const item = new PopupMenu.PopupMenuItem(label, { reactive: false });
     item.insert_child_at_index(
@@ -318,19 +452,57 @@ export default class FedoraUpdateWatchExtension extends Extension {
       0
     );
     if (state === 'below-threshold' || state === 'unknown') {
-      item.add_style_class_name('fedora-update-watch-risk');
+      item.add_style_class_name('safe-update-risk');
     }
     this._menuSection.addMenuItem(item);
   }
 
-  _notify(pkg, { daysSinceStable, karma }) {
-    const title = _('Fedora Update Watch');
-    // Translators: %s is a package name; the first %d is days since it was
-    // pushed to Fedora's stable repo, the second %d is its Bodhi karma score.
-    const body = _('%s was pushed to stable %d day(s) ago (karma %d) — consider waiting before updating.')
-      .replace('%s', pkg)
-      .replace('%d', String(daysSinceStable))
-      .replace('%d', String(karma));
-    Main.notify(title, body);
+  _describeShellCompat({ error, upgrading, targetMajor, incompatible }) {
+    if (error) {
+      return _('GNOME Shell: could not check for a pending upgrade right now');
+    }
+    if (!upgrading) {
+      return _('GNOME Shell: no major-version upgrade pending — nothing to break');
+    }
+    if (incompatible.length === 0) {
+      return _('Updating to GNOME Shell %s is safe — all your enabled extensions already support it').replace(
+        '%s',
+        targetMajor
+      );
+    }
+    return _(
+      'Updating to GNOME Shell %s will disable these extensions (they don\'t support it yet): %s'
+    )
+      .replace('%s', targetMajor)
+      .replace('%s', incompatible.map((ext) => ext.name).join(', '));
+  }
+
+  _shellCompatState({ error, upgrading, incompatible }) {
+    if (error) return 'unknown';
+    if (upgrading && incompatible.length > 0) return 'shell-incompatible';
+    return 'ok';
+  }
+
+  _addShellCompatMenuItem(shellCheck) {
+    const state = this._shellCompatState(shellCheck);
+    const label = this._describeShellCompat(shellCheck);
+
+    const item = new PopupMenu.PopupMenuItem(label, { reactive: false });
+    item.insert_child_at_index(
+      new St.Icon({ icon_name: ICON_FOR_STATE[state], style_class: 'popup-menu-icon' }),
+      0
+    );
+    if (state === 'shell-incompatible') {
+      item.add_style_class_name('safe-update-risk');
+    }
+    this._menuSection.addMenuItem(item);
+  }
+
+  _notify(pkg, result) {
+    Main.notify(_('Fedora Safe Update'), this._describePackageState(pkg, result, false));
+  }
+
+  _notifyShellIncompatibility(shellCheck) {
+    Main.notify(_('Fedora Safe Update'), this._describeShellCompat(shellCheck));
   }
 }

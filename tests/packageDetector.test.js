@@ -3,11 +3,15 @@ import assert from 'node:assert/strict';
 
 import { getPendingWatchedPackages } from '../lib/packageDetector.js';
 
-test('parses pkcon get-updates output and intersects with the watch list', async () => {
+test('a pending subpackage counts as its watched source package being pending', async () => {
+  // Real Fedora systems never have a plain "mesa" binary RPM installed —
+  // only subpackages like "mesa-libGL" — but Bodhi tracks updates by the
+  // "mesa" source package. The detector must report "mesa" (what Bodhi
+  // indexes), not the subpackage name, when only subpackages are pending.
   const pkconOutput = [
     'Normal      kernel-7.2.8-200.fc44.x86_64            (updates)',
-    'Security    mesa-24.0-1.fc44.x86_64                 (updates)',
     'Security    mesa-libGL-24.0-1.fc44.x86_64           (updates)',
+    'Security    mesa-dri-drivers-24.0-1.fc44.x86_64     (updates)',
     'Low         vim-enhanced-9.1-1.fc44.x86_64          (updates)',
   ].join('\n');
 
@@ -20,10 +24,16 @@ test('parses pkcon get-updates output and intersects with the watch list', async
     runSubprocess,
   });
 
-  // "mesa-libGL-..." must NOT be mistaken for a pending "mesa" update — the
-  // name/version boundary parsing has to stop at "mesa", not swallow the
-  // subpackage name too.
   assert.deepEqual(result.sort(), ['kernel', 'mesa']);
+});
+
+test('does not match an unrelated package that merely shares a name prefix with no hyphen boundary', async () => {
+  const pkconOutput = 'Normal      mesalib-1.0-1.fc44.x86_64            (updates)';
+  const runSubprocess = async () => pkconOutput;
+
+  const result = await getPendingWatchedPackages(['mesa'], { runSubprocess });
+
+  assert.deepEqual(result, []);
 });
 
 test('matches watch-list entries case-insensitively', async () => {
@@ -32,7 +42,7 @@ test('matches watch-list entries case-insensitively', async () => {
 
   const result = await getPendingWatchedPackages(['Kernel'], { runSubprocess });
 
-  assert.deepEqual(result, ['kernel']);
+  assert.deepEqual(result, ['Kernel']);
 });
 
 test('falls back to dnf check-update when pkcon fails, accepting its exit-100 "updates available" convention', async () => {

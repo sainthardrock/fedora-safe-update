@@ -3,6 +3,6 @@
  * not CSS color overrides — St's theme engine has no portable "warning
  * color" variable to hook into safely across themes. This just adds a
  * theme-neutral weight bump so risky/unknown rows stand out in the list. */
-.fedora-update-watch-risk {
+.safe-update-risk {
   font-weight: bold;
 }
