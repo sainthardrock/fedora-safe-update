@@ -301,7 +301,7 @@ export default class SafeUpdateExtension extends Extension {
       }
 
       for (const pkg of pending) {
-        const { result, stale } = await this._checkPackage(pkg);
+        const { result, stale } = await this._checkPackage(pkg, generation);
         if (generation !== this._pollGeneration) return;
 
         if (stale) anyStale = true;
@@ -367,14 +367,19 @@ export default class SafeUpdateExtension extends Extension {
     return { error: false, ...checkShellUpgradeCompatibility({ currentMajor, pendingVersion, extensions }) };
   }
 
-  async _checkPackage(pkg) {
+  // `generation` guards the cache read/write below against a disable() that
+  // ran while the Bodhi fetch was in flight — not a boolean "is this still
+  // alive" flag, but the same poll-generation counter _poll() already uses
+  // to abandon a torn-down cycle, so a stale write never reaches the Map
+  // enable() replaces in the next cycle.
+  async _checkPackage(pkg, generation) {
     try {
       const record = await fetchLatestUpdateForPackage(pkg, {
         fetchImpl: this._soupFetch,
         fedoraRelease: this._fedoraRelease,
       });
       const result = computeRisk(record, { minStableAgeDays: MIN_STABLE_AGE_DAYS, now: new Date() });
-      this._lastStates?.set(pkg, result);
+      if (generation === this._pollGeneration) this._lastStates.set(pkg, result);
       return { result, stale: false };
     } catch (err) {
       // A transient Bodhi failure falls back to the last known state rather
@@ -383,8 +388,8 @@ export default class SafeUpdateExtension extends Extension {
       // error), the fallback is 'unknown' — explicitly "we don't know,
       // be cautious" — never 'ok'.
       logError(err, `fedora-safe-update: Bodhi lookup failed for ${pkg}`);
-      const result =
-        this._lastStates?.get(pkg) ?? { state: 'unknown', daysSinceStable: null, karma: null };
+      const cached = generation === this._pollGeneration ? this._lastStates.get(pkg) : undefined;
+      const result = cached ?? { state: 'unknown', daysSinceStable: null, karma: null };
       return { result, stale: true };
     }
   }
@@ -442,19 +447,23 @@ export default class SafeUpdateExtension extends Extension {
     );
   }
 
-  _addMenuItem(pkg, result, stale) {
-    const { state } = result;
-    const label = this._describePackageState(pkg, result, stale);
-
+  // Shared by both menu-item builders below so the icon/style wiring exists
+  // in exactly one place.
+  _addStateMenuItem(label, state, { risky }) {
     const item = new PopupMenu.PopupMenuItem(label, { reactive: false });
     item.insert_child_at_index(
       new St.Icon({ icon_name: ICON_FOR_STATE[state], style_class: 'popup-menu-icon' }),
       0
     );
-    if (state === 'below-threshold' || state === 'unknown') {
-      item.add_style_class_name('safe-update-risk');
-    }
+    if (risky) item.add_style_class_name('safe-update-risk');
     this._menuSection.addMenuItem(item);
+  }
+
+  _addMenuItem(pkg, result, stale) {
+    const { state } = result;
+    this._addStateMenuItem(this._describePackageState(pkg, result, stale), state, {
+      risky: state === 'below-threshold' || state === 'unknown',
+    });
   }
 
   _describeShellCompat({ error, upgrading, targetMajor, incompatible }) {
@@ -485,17 +494,9 @@ export default class SafeUpdateExtension extends Extension {
 
   _addShellCompatMenuItem(shellCheck) {
     const state = this._shellCompatState(shellCheck);
-    const label = this._describeShellCompat(shellCheck);
-
-    const item = new PopupMenu.PopupMenuItem(label, { reactive: false });
-    item.insert_child_at_index(
-      new St.Icon({ icon_name: ICON_FOR_STATE[state], style_class: 'popup-menu-icon' }),
-      0
-    );
-    if (state === 'shell-incompatible') {
-      item.add_style_class_name('safe-update-risk');
-    }
-    this._menuSection.addMenuItem(item);
+    this._addStateMenuItem(this._describeShellCompat(shellCheck), state, {
+      risky: state === 'shell-incompatible',
+    });
   }
 
   _notify(pkg, result) {
