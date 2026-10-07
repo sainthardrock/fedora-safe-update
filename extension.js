@@ -37,7 +37,7 @@ const STATE_PRIORITY = {
 };
 
 const ICON_FOR_STATE = {
-  ok: 'emblem-default-symbolic',
+  ok: 'object-select-symbolic',
   untracked: 'dialog-question-symbolic',
   unknown: 'dialog-warning-symbolic',
   'below-threshold': 'dialog-warning-symbolic',

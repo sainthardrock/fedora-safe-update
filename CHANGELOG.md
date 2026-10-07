@@ -7,6 +7,10 @@ Tek bump yolu `./release` — elle `VERSION`/tag düzenlemeyin.
 
 ## [Unreleased]
 ### Fixed
+- The "ok" state icon (`emblem-default-symbolic`) doesn't exist in the
+  Adwaita icon theme and silently fell back to a broken-icon glyph.
+  Switched to `object-select-symbolic` (a plain checkmark, confirmed
+  present in the theme).
 - `mesa` was never actually detected as pending: Fedora has no plain `mesa`
   binary package, only subpackages (`mesa-libGL`, `mesa-dri-drivers`, ...),
   and the pending-update detector only matched exact names. It now also
